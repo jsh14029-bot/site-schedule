@@ -406,6 +406,18 @@ def show_direct_kakao(connection):
     root = Path(__file__).resolve().parent
     with st.container(border=True):
         st.subheader("💬 카카오톡 직접 연결")
+        st.caption("버튼을 누른 이 PC의 카카오톡을 읽습니다. 사용하는 Windows PC마다 처음 한 번 설치해주세요.")
+        with st.expander("다른 PC에서 처음 사용하기 · 연결 프로그램 다운로드"):
+            st.markdown("① ZIP 다운로드·압축 풀기 → ② `install_kakao_pc.bat` 실행 → ③ `start_kakao_pc.bat` 실행")
+            st.markdown("④ 이 PC의 카카오톡에서 **일정공유방☆** 열기 → ⑤ 아래 ‘PC 연결 설정’에 **이 PC에서 발급한 연결코드** 입력")
+            st.caption("Python이 없으면 먼저 설치하고 ‘Add Python to PATH’를 선택하세요. 이후에는 start_kakao_pc.bat만 실행하면 됩니다.")
+            try:
+                from pc_package import build_pc_package
+                package = build_pc_package(root)
+            except (ImportError, FileNotFoundError):
+                st.info("관리자가 PC 연결 프로그램 파일을 GitHub에 올리면 여기서 다운로드할 수 있습니다.")
+            else:
+                st.download_button("📥 이 PC용 연결 프로그램 다운로드 (ZIP)", data=package, file_name="kakao-pc.zip", mime="application/zip", key="download_kakao_pc")
         component_path = root / "kakao_component"
         if not component_path.is_dir():
             st.error("kakao_component 폴더를 코드와 함께 업로드해주세요.")

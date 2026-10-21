@@ -1,0 +1,2 @@
+# Text-only PC bridge. Streamlit and OCR packages are not needed on client PCs.
+pywinauto>=0.6.9; sys_platform == "win32"

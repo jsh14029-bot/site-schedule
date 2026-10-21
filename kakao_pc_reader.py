@@ -126,6 +126,33 @@ def read_open_room(read_date):
         pythoncom.CoUninitialize()
 
 
+def read_exported_transcript(exported, read_date, timeout=15):
+    """Kakao may still hold the export open after the Save button returns."""
+    deadline = clock.monotonic() + timeout
+    last_error = None
+    while clock.monotonic() < deadline:
+        try:
+            data = exported.read_bytes()
+        except (FileNotFoundError, PermissionError) as error:
+            last_error = error
+            clock.sleep(0.15)
+            continue
+        if not data:
+            clock.sleep(0.15)
+            continue
+        encodings = ("utf-16",) if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "cp949")
+        for encoding in encodings:
+            try:
+                text = data.decode(encoding)
+            except UnicodeError:
+                continue
+            return parse_transcript(text, read_date)
+        raise ValueError("저장된 대화 파일의 문자 형식을 읽지 못했습니다.")
+    if isinstance(last_error, PermissionError):
+        raise ValueError("대화 파일은 저장됐지만 카카오톡이 파일을 사용 중이라 읽지 못했습니다. 잠시 후 다시 눌러주세요.")
+    raise ValueError("지정한 위치에서 저장된 대화 파일을 찾지 못했습니다. 저장창이 닫혔는지 확인해주세요.")
+
+
 def _read_open_room_windows(read_date):
     from pywinauto import Desktop
     windows = [window for window in Desktop(backend="win32").windows(title=KAKAO_ROOM_NAME, visible_only=True) if _is_kakao_process(window.process_id())]
@@ -138,28 +165,37 @@ def _read_open_room_windows(read_date):
     folder.mkdir(exist_ok=True)
     exported = folder / ("transcript-" + uuid.uuid4().hex + ".txt")
     # These are product UI operations, bounded to the verified KakaoTalk process.
-    room.set_focus()
-    room.type_keys("^s", set_foreground=True)
-    desktop = Desktop(backend="uia")
-    dialog = desktop.window(process=room.process_id(), title_re="^(다른 이름으로 저장|Save As)$", control_type="Window")
-    dialog.wait("visible", timeout=12)
-    dialog.child_window(auto_id="1001", control_type="Edit").set_edit_text(str(exported))
-    dialog.child_window(auto_id="1", control_type="Button").invoke()
+    stage = "채팅방 선택"
     try:
-        deadline = clock.monotonic() + 15
-        while clock.monotonic() < deadline:
-            if exported.exists() and exported.stat().st_size:
-                data = exported.read_bytes()
-                encodings = ("utf-16",) if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "cp949")
-                for encoding in encodings:
-                    try:
-                        text = data.decode(encoding)
-                    except UnicodeError:
-                        continue
-                    return parse_transcript(text, read_date)
-                raise ValueError("대화 텍스트의 문자 형식을 읽지 못했습니다.")
-            clock.sleep(0.15)
-        raise ValueError("대화 텍스트를 저장하지 못했습니다. 저장창을 확인해주세요.")
+        room.set_focus()
+        room.type_keys("^s", set_foreground=True)
+        stage = "저장창 찾기"
+        # This is the native common file dialog. Use its Win32 controls;
+        # UIA discovery can miss Kakao's owned modal and leave Ctrl+S unfinished.
+        desktop = Desktop(backend="win32")
+        dialog = desktop.window(process=room.process_id(), title_re="^(다른 이름으로 저장|Save As)$", class_name="#32770")
+        dialog.wait("visible", timeout=12)
+        stage = "저장 파일명 입력"
+        filename = dialog.child_window(control_id=1001, class_name="Edit")
+        filename.set_edit_text(str(exported))
+        if filename.window_text() != str(exported):
+            raise ValueError("저장창의 파일명을 자동으로 입력하지 못했습니다. 아직 일정은 등록하지 않았습니다.")
+        stage = "저장 버튼 실행"
+        # BM_CLICK must be posted, not sent synchronously. Kakao's save handler
+        # opens a modal "export complete" window before returning. A synchronous
+        # click/invoke therefore waits for that modal and never reaches file read.
+        dialog.child_window(control_id=1, class_name="Button").post_message(0x00F5, 0, 0)
+        stage = "저장 파일 읽기"
+        return read_exported_transcript(exported, read_date)
+    except (ValueError, ImportError):
+        raise
+    except Exception as error:
+        # Do not expose chat text, local paths or credentials in browser errors.
+        raise ValueError(f"카카오톡 연결 중 ‘{stage}’ 단계에서 실패했습니다. 오류 종류: {type(error).__name__}") from error
     finally:
         if exported.parent.resolve() == folder.resolve():
-            exported.unlink(missing_ok=True)
+            try:
+                exported.unlink(missing_ok=True)
+            except OSError:
+                # Cleanup must never discard a successfully parsed schedule batch.
+                pass
