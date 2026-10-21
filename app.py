@@ -12,6 +12,7 @@ except ImportError:
 import streamlit as st
 from streamlit_calendar import calendar
 from schedule_autofill import parse_schedule_text, recognize_schedule_image
+from kakao_sync import drain_inbox, import_batch
 
 st.set_page_config(page_title="현장 일정관리", page_icon="🏗️", layout="wide")
 
@@ -167,7 +168,7 @@ def schedule_form(prefix, category, saved=None):
     except ValueError:
         saved_date = date.today()
     try:
-        saved_time = time.fromisoformat(saved.get("schedule_time") or "09:00")
+        saved_time = time.fromisoformat(saved["schedule_time"]) if saved.get("schedule_time") else (None if saved else time(9, 0))
     except ValueError:
         saved_time = time(9, 0)
     try:
@@ -188,7 +189,7 @@ def schedule_form(prefix, category, saved=None):
         with left:
             values["schedule_date"] = st.date_input("날짜", key=f"{prefix}_schedule_date")
         with arrival_col:
-            values["schedule_time"] = st.time_input("도착시간", key=f"{prefix}_schedule_time")
+            values["schedule_time"] = st.time_input("도착시간", value=None, key=f"{prefix}_schedule_time")
         with end_col:
             values["end_time"] = st.time_input("종료시간", value=None, key=f"{prefix}_end_time")
         values["category"] = category
@@ -465,17 +466,69 @@ def show_notice_builder(connection):
             st.info("오른쪽에서 일정을 클릭하거나 ‘기간 전체 공지문 생성’을 눌러주세요.")
 
 
+@st.fragment(run_every="10s")
+def receive_kakao_schedules():
+    # A short-lived connection lets new batches arrive while the UI is open.
+    connection = sqlite3.connect("schedule.db", timeout=30)
+    try:
+        results = drain_inbox(connection)
+    except sqlite3.Error:
+        st.caption("일정 저장소가 사용 중입니다. 잠시 후 자동으로 다시 확인합니다.")
+        return
+    finally:
+        connection.close()
+    inserted = sum(len(result.get("inserted", [])) for result in results)
+    skipped = sum(len(result.get("skipped", [])) for result in results)
+    if results:
+        st.session_state["kakao_last_results"] = results
+    if inserted:
+        st.session_state["flash"] = f"카카오톡 일정 {inserted}건 자동등록 · 중복 {skipped}건 제외"
+        st.rerun()
+
+
+def show_kakao_sync(connection):
+    st.subheader("🔄 카카오톡 일정 가져오기")
+    st.info("컴퓨터 유즈가 지정한 단톡방을 읽어 정리한 일정을 자동으로 등록합니다. 카카오톡에 메시지를 보내지 않습니다.")
+    st.caption("이 컴퓨터에서 전달받은 일정은 화면이 열려 있는 동안 10초마다 확인합니다. 카카오톡을 직접 상시 감시하는 기능은 아닙니다.")
+    st.markdown("**온라인 프로그램에 반영하기**")
+    st.caption("컴퓨터 유즈가 만든 일정 파일을 올리면 바로 등록됩니다. 이미 등록되었거나 휴지통에 있는 일정은 다시 만들지 않습니다. 확인되지 않은 값은 비워둡니다.")
+    uploaded = st.file_uploader("카카오톡 일정 파일 (.json) — 업로드 즉시 자동등록", type=["json"], key="kakao_batch_upload")
+    if uploaded is not None:
+        payload = uploaded.getvalue()
+        digest = hashlib.sha256(payload).hexdigest()
+        if st.session_state.get("kakao_uploaded_digest") != digest:
+            try:
+                result = import_batch(connection, payload)
+            except (ValueError, UnicodeError):
+                st.error("일정 파일의 형식·날짜·시간을 확인해주세요. 이 파일의 일정은 등록하지 않았습니다.")
+            except sqlite3.Error:
+                st.error("일정 저장소가 사용 중입니다. 잠시 후 다시 시도해주세요.")
+            else:
+                st.session_state["kakao_uploaded_digest"] = digest
+                st.session_state["kakao_upload_result"] = result
+        result = st.session_state.get("kakao_upload_result") if st.session_state.get("kakao_uploaded_digest") == digest else None
+        if result:
+            st.success(f"등록 {len(result['inserted'])}건 · 중복 제외 {len(result['skipped'])}건")
+    for result in st.session_state.get("kakao_last_results", []):
+        if "error" in result:
+            st.warning("전달받은 일정 파일의 형식이 맞지 않습니다. 원본은 수신함에 보관했습니다.")
+        else:
+            st.caption(f"최근 수신: 등록 {len(result['inserted'])}건 · 중복 제외 {len(result['skipped'])}건")
+    st.caption("로컬·온라인은 현재 별도 저장소입니다. 같은 파일을 양쪽에 전달하면 같은 일정을 등록할 수 있으며, 이후 수정사항까지 계속 공유하려면 공용 DB 연결이 필요합니다.")
+
+
 def main():
     # 기존 버전과 동일한 경로. 기존 프로젝트 폴더에서 실행하세요.
     conn = sqlite3.connect("schedule.db", timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         migrate_database(conn)
+        receive_kakao_schedules()
         st.title("🏗️ 현장 일정관리")
         st.caption("주요 자재반입 및 현장 업무일정을 한 곳에서 관리합니다.")
         if "pending_menu" in st.session_state:
             st.session_state["main_menu"] = st.session_state.pop("pending_menu")
-        menu = st.radio("메뉴", ["📅 캘린더", "➕ 일정등록", "📋 일정관리", "📢 카카오톡 공지"], horizontal=True, label_visibility="collapsed", key="main_menu")
+        menu = st.radio("메뉴", ["📅 캘린더", "➕ 일정등록", "📋 일정관리", "📢 카카오톡 공지", "🔄 카카오톡 연동"], horizontal=True, label_visibility="collapsed", key="main_menu")
         st.divider()
         if "flash" in st.session_state:
             st.success(st.session_state.pop("flash"))
@@ -583,6 +636,8 @@ def main():
                             st.rerun()
             with trash_panel:
                 show_trash(conn)
+        elif menu == "🔄 카카오톡 연동":
+            show_kakao_sync(conn)
         else:
             show_notice_builder(conn)
     finally:

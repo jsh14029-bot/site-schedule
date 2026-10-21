@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.37,<2
 streamlit-calendar
 holidays>=0.106,<1
 Pillow
