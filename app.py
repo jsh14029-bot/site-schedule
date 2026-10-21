@@ -1,7 +1,9 @@
 import sqlite3
 import hashlib
+import os
+from pathlib import Path
 from html import escape
-from datetime import date, time
+from datetime import date, time, datetime, timedelta, timezone
 from functools import lru_cache
 
 try:
@@ -12,7 +14,7 @@ except ImportError:
 import streamlit as st
 from streamlit_calendar import calendar
 from schedule_autofill import parse_schedule_text, recognize_schedule_image
-from kakao_sync import drain_inbox, import_batch
+from kakao_sync import KAKAO_ROOM_NAME, drain_inbox, import_batch
 
 st.set_page_config(page_title="현장 일정관리", page_icon="🏗️", layout="wide")
 
@@ -399,6 +401,49 @@ def show_autofill_panel():
             st.warning(warning)
 
 
+def show_direct_kakao(connection):
+    from streamlit.components.v1 import declare_component
+    root = Path(__file__).resolve().parent
+    with st.container(border=True):
+        st.subheader("💬 카카오톡 직접 연결")
+        component_path = root / "kakao_component"
+        if not component_path.is_dir():
+            st.error("kakao_component 폴더를 코드와 함께 업로드해주세요.")
+            return
+        reader_component = declare_component("kakao_direct_reader", path=str(component_path))
+        local_token = ""
+        token_path = root / ".local-agent" / "pairing-token.txt"
+        if os.name == "nt" and token_path.exists():
+            local_token = token_path.read_text(encoding="ascii").strip()
+        today_korea = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+        value = reader_component(today=today_korea, local_token=local_token, key="kakao_direct_reader", default=None)
+        st.caption("무료 PC 연결 프로그램이 실행 중이어야 합니다. 버튼을 누른 PC의 카카오톡을 읽고, 현재 열어둔 일정관리 프로그램에 저장합니다.")
+        if isinstance(value, dict) and value.get("request_id") != st.session_state.get("kakao_direct_processed"):
+            try:
+                batch = value.get("batch", {})
+                if batch.get("room_name") != KAKAO_ROOM_NAME:
+                    raise ValueError("지정한 채팅방에서 읽은 내용이 아닙니다.")
+                result = import_batch(connection, batch) if batch.get("schedules") else {"inserted": [], "skipped": []}
+            except (ValueError, TypeError, sqlite3.Error):
+                st.error("읽은 일정의 형식을 확인하지 못했습니다. 등록하지 않았습니다.")
+            else:
+                st.session_state["kakao_direct_processed"] = value["request_id"]
+                st.session_state["kakao_direct_result"] = result
+                st.session_state["kakao_direct_pending"] = value.get("pending", [])[:200]
+        result = st.session_state.get("kakao_direct_result")
+        if result:
+            st.success(f"직접 연결 결과: 등록 {len(result['inserted'])}건 · 중복 제외 {len(result['skipped'])}건")
+        pending = st.session_state.get("kakao_direct_pending", [])
+        if pending:
+            with st.expander(f"확인이 필요한 메시지 {len(pending)}건", expanded=True):
+                for index, item in enumerate(pending):
+                    st.text(str(item.get("text", ""))[:20_000])
+                    st.caption(" / ".join(map(str, item.get("reasons", []))))
+                    if st.button("왼쪽 입력란에서 확인하기", key=f"kakao_pending_{index}"):
+                        st.session_state["pending_menu"] = "➕ 일정등록"
+                        queue_schedule_autofill(str(item.get("text", "")))
+
+
 def show_notice_builder(connection):
     preview_panel, list_panel = st.columns([3, 2], gap="large")
     with preview_panel:
@@ -488,7 +533,8 @@ def receive_kakao_schedules():
 
 def show_kakao_sync(connection):
     st.subheader("🔄 카카오톡 일정 가져오기")
-    st.info("컴퓨터 유즈가 지정한 단톡방을 읽어 정리한 일정을 자동으로 등록합니다. 카카오톡에 메시지를 보내지 않습니다.")
+    st.info(f"수집 대상: {KAKAO_ROOM_NAME} · 텍스트 메시지만 · 사진·첨부파일 제외")
+    show_direct_kakao(connection)
     st.caption("이 컴퓨터에서 전달받은 일정은 화면이 열려 있는 동안 10초마다 확인합니다. 카카오톡을 직접 상시 감시하는 기능은 아닙니다.")
     st.markdown("**온라인 프로그램에 반영하기**")
     st.caption("컴퓨터 유즈가 만든 일정 파일을 올리면 바로 등록됩니다. 이미 등록되었거나 휴지통에 있는 일정은 다시 만들지 않습니다. 확인되지 않은 값은 비워둡니다.")
@@ -569,6 +615,7 @@ def main():
             form_panel, assist_panel = st.columns([3, 2], gap="large")
             with assist_panel:
                 show_autofill_panel()
+                show_direct_kakao(conn)
             with form_panel:
                 st.subheader("➕ 새 일정 등록")
                 category = st.selectbox("구분", CATEGORIES, key="new_category")

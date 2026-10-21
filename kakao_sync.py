@@ -16,7 +16,13 @@ from threading import Lock
 ROOT = Path(__file__).resolve().parent
 DATA_FIELDS = ["schedule_date", "schedule_time", "category", "title", "company", "quantity", "location", "memo", "specification", "person", "participants", "end_time", "vehicle_count"]
 CATEGORIES = {"자재반입", "타설", "회의", "기타"}
+KAKAO_ROOM_NAME = "일정공유방☆"
 INBOX_LOCK = Lock()
+
+
+def is_target_room(room_name):
+    # Do not guess when multiple rooms have similar names.
+    return room_name == KAKAO_ROOM_NAME
 
 
 def normalize(value):
@@ -32,6 +38,8 @@ def validate_batch(raw):
         raw = json.loads(raw)
     if not isinstance(raw, dict) or raw.get("version") != 1:
         raise ValueError("지원하지 않는 일정 파일 형식입니다.")
+    if "room_name" in raw and not is_target_room(raw["room_name"]):
+        raise ValueError(f"자동 수집 대상은 ‘{KAKAO_ROOM_NAME}’ 방뿐입니다.")
     source = raw.get("source")
     if not isinstance(source, str) or not source.strip() or len(source) > 300:
         raise ValueError("일정의 출처가 필요합니다.")
