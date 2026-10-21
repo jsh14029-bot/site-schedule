@@ -1,2 +1,7 @@
 streamlit
 streamlit-calendar
+holidays>=0.106,<1
+Pillow
+streamlit-paste-button>=0.1.2,<1
+rapidocr>=3.10,<4
+onnxruntime>=1.20,<2
