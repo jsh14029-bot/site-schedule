@@ -413,17 +413,23 @@ def show_direct_kakao(connection):
     with st.container(border=True):
         st.subheader("💬 카카오톡 직접 연결")
         st.caption("버튼을 누른 이 PC의 카카오톡을 읽습니다. 사용하는 Windows PC마다 처음 한 번 설치해주세요.")
-        with st.expander("다른 PC에서 처음 사용하기 · 연결 프로그램 다운로드"):
-            st.markdown("① ZIP 다운로드·압축 풀기 → ② `install_kakao_pc.bat` 실행 → ③ `start_kakao_pc.bat` 실행")
-            st.markdown("④ 이 PC의 카카오톡에서 **일정공유방☆** 열기 → ⑤ 아래 ‘PC 연결 설정’에 **이 PC에서 발급한 연결코드** 입력")
-            st.caption("Python이 없으면 먼저 설치하고 ‘Add Python to PATH’를 선택하세요. 이후에는 start_kakao_pc.bat만 실행하면 됩니다.")
-            try:
-                from pc_package import build_pc_package
-                package = build_pc_package(root)
-            except (ImportError, FileNotFoundError):
-                st.info("관리자가 PC 연결 프로그램 파일을 GitHub에 올리면 여기서 다운로드할 수 있습니다.")
-            else:
-                st.download_button("📥 이 PC용 연결 프로그램 다운로드 (ZIP)", data=package, file_name="kakao-pc.zip", mime="application/zip", key="download_kakao_pc")
+        try:
+            from pc_package import get_pc_installer
+            installer = get_pc_installer(root)
+        except (ImportError, OSError, ValueError):
+            st.info("PC 설치 파일을 준비 중입니다. 관리자가 KakaoPC_Setup.exe와 pc_package.py를 업로드하면 다운로드 버튼이 표시됩니다.")
+        else:
+            st.download_button(
+                "📥 카카오톡 PC 연결 설치 파일 받기 (EXE)",
+                data=installer, file_name="KakaoPC_Setup.exe",
+                mime="application/octet-stream", key="download_kakao_pc",
+                use_container_width=True,
+            )
+        with st.expander("처음 사용하기 · 설치 및 연결 방법"):
+            st.markdown("① 위 버튼으로 **KakaoPC_Setup.exe** 받기 → ② 파일 실행 → ③ **설치 시작** → ④ 완료 후 **실행하기**")
+            st.caption("Windows 10/11 64비트용입니다. Python과 필요한 라이브러리가 포함되어 있습니다.")
+            st.markdown("⑤ 열린 연결코드 페이지의 코드를 아래 **PC 연결코드** 칸에 입력 → ⑥ PC 카카오톡에서 **일정공유방☆**을 별도 창으로 열기 → ⑦ **카카오톡 일정 가져와서 등록** 누르기")
+            st.caption("다음부터 바탕화면의 ‘현장일정 카카오톡 연결’ 바로가기로 실행하세요. 연결 창의 X는 트레이로 숨기며, 종료는 ‘연결 종료’를 누릅니다.")
         component_path = root / "kakao_component"
         if not component_path.is_dir():
             st.error("kakao_component 폴더를 코드와 함께 업로드해주세요.")
