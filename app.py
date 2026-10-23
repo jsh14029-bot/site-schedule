@@ -417,19 +417,57 @@ def show_direct_kakao(connection):
             from pc_package import get_pc_installer
             installer = get_pc_installer(root)
         except (ImportError, OSError, ValueError):
-            st.info("PC 설치 파일을 준비 중입니다. 관리자가 KakaoPC_Setup.exe와 pc_package.py를 업로드하면 다운로드 버튼이 표시됩니다.")
+            st.info("PC 설치 파일을 준비 중입니다. 관리자가 KakaoPC_Setup.msi와 pc_package.py를 업로드하면 다운로드 버튼이 표시됩니다.")
         else:
             st.download_button(
-                "📥 카카오톡 PC 연결 설치 파일 받기 (EXE)",
-                data=installer, file_name="KakaoPC_Setup.exe",
-                mime="application/octet-stream", key="download_kakao_pc",
+                "📥 카카오톡 PC 연결 설치 파일 받기 (MSI)",
+                data=installer, file_name="KakaoPC_Setup.msi",
+                mime="application/x-msi", key="download_kakao_pc",
                 use_container_width=True,
             )
-        with st.expander("처음 사용하기 · 설치 및 연결 방법"):
-            st.markdown("① 위 버튼으로 **KakaoPC_Setup.exe** 받기 → ② 파일 실행 → ③ **설치 시작** → ④ 완료 후 **실행하기**")
-            st.caption("Windows 10/11 64비트용입니다. Python과 필요한 라이브러리가 포함되어 있습니다.")
-            st.markdown("⑤ 열린 연결코드 페이지의 코드를 아래 **PC 연결코드** 칸에 입력 → ⑥ PC 카카오톡에서 **일정공유방☆**을 별도 창으로 열기 → ⑦ **카카오톡 일정 가져와서 등록** 누르기")
-            st.caption("다음부터 바탕화면의 ‘현장일정 카카오톡 연결’ 바로가기로 실행하세요. 연결 창의 X는 트레이로 숨기며, 종료는 ‘연결 종료’를 누릅니다.")
+        st.caption("처음 사용하는 PC에서는 아래 설명을 1번부터 따라가세요. 이미 설치했다면 바탕화면 Site Schedule Kakao PC 바로가기로 실행하면 됩니다. 설치 파일 버전: 1.2.0.")
+        with st.expander("처음 설치하는 분 · 다운로드부터 연결까지 자세히 보기", expanded=True):
+            download_tab, warning_tab, install_tab, connect_tab = st.tabs([
+                "1. 다운로드", "2. 보안 경고", "3. 설치", "4. 연결",
+            ])
+            with download_tab:
+                st.markdown("**① 위의 ‘설치 파일 받기(MSI)’ 버튼을 누르세요.**")
+                st.markdown("**② 브라우저 오른쪽 위 다운로드 표시를 누르세요.** 안 보이면 **Ctrl+J**를 누르면 다운로드 목록이 열립니다.")
+                st.markdown("**③ `KakaoPC_Setup.msi`를 찾으세요.** 여러 번 받았다면 파일 이름 뒤에 `(1)`, `(2)`가 붙을 수 있습니다.")
+                st.info("파일 옆에 ‘일반적으로 다운로드되지 않습니다’가 나오면 옆의 **2. 보안 경고** 탭을 확인하세요. 경고 없이 완료됐다면 **3. 설치**로 이동하세요.")
+                st.caption("Windows 10/11 64비트 PC용입니다. Python과 필요한 라이브러리가 포함되어 있습니다.")
+            with warning_tab:
+                st.markdown("**‘일반적으로 다운로드되지 않습니다’라는 Edge 경고가 보일 때**")
+                st.write("이 설치 파일은 디지털 서명이 없는 새 프로그램이라 경고가 나타날 수 있습니다. 다운로드 출처가 이 일정관리 사이트의 설치 버튼인지 먼저 확인하세요.")
+                st.markdown("**① Ctrl+J → 해당 MSI 항목에 마우스를 올리세요.** 항목 옆의 **점 세 개(⋯)** 또는 마우스 오른쪽 메뉴를 여세요. 다운로드 목록 맨 위의 공통 메뉴와는 다릅니다.")
+                st.markdown("**② ‘유지’가 보이면 선택하세요.** 추가 확인창에 ‘더 보기 → 계속 유지’가 보이면 내용을 확인한 뒤 선택하세요. 브라우저 버전에 따라 이름과 순서가 다를 수 있습니다.")
+                st.markdown("**③ ‘취소 / 삭제’ 확인창만 보이나요?** ‘삭제’ 글자 자체 대신 **삭제 버튼 오른쪽의 작은 화살표(∨)**를 눌러 유지 항목이 있는지 확인하세요.")
+                st.markdown("**④ 다운로드가 완료되면 ‘파일 열기’를 누르세요.** 이어서 Windows의 ‘PC를 보호했습니다’가 나타날 수 있습니다. 출처를 확인하고 실행하기로 결정했다면 **추가 정보 → 실행**을 선택할 수 있습니다.")
+                st.caption("‘게시자: 알 수 없음’은 이 파일에 정식 디지털 서명이 없다는 뜻입니다. 경고가 없다는 사실만으로 안전성이 보장되지는 않습니다.")
+                st.warning("보안 기능 전체를 끄지 마세요. 회사 정책으로 유지·실행이 차단되거나 악성 프로그램이 탐지되면 진행을 멈추고 사내 관리자에게 확인하세요.")
+                st.caption("‘자세히 알아보기’를 누르면 Microsoft 도움말 페이지가 열립니다. 설치를 계속하려면 다운로드 목록(Ctrl+J)으로 돌아오세요.")
+            with install_tab:
+                st.markdown("**① 받은 `KakaoPC_Setup.msi`를 더블클릭하세요.** 파일을 못 찾겠다면 Ctrl+J에서 폴더 열기를 누르거나 파일 탐색기의 다운로드 폴더를 확인하세요.")
+                st.markdown("**② Windows Installer가 필요한 파일을 설치합니다.** 설치 창이 닫힐 때까지 기다리세요.")
+                st.markdown("**③ 바탕화면의 Site Schedule Kakao PC 바로가기를 더블클릭하세요.** MSI 설치 후 연결 프로그램을 직접 실행하는 단계입니다.")
+                st.markdown("**④ ‘연결 실행 중입니다’ 표시와 연결코드 페이지가 나오는지 확인하세요.** 연결코드 페이지 주소는 이 PC의 `http://127.0.0.1:8765/`입니다.")
+                st.info("이 설치 파일에는 Python이 포함되어 있습니다. 별도로 Python을 설치하거나 명령어를 입력할 필요가 없습니다.")
+            with connect_tab:
+                st.markdown("**① 연결코드 페이지의 코드를 복사하세요.** 페이지가 자동으로 안 열리면 아래 **이 컴퓨터의 연결코드 보기** 링크를 누르세요.")
+                st.markdown("**② 이 일정관리 사이트로 돌아와 아래 ‘PC 연결코드’ 칸에 붙여넣으세요.** 다른 사람의 코드가 아닌 현재 PC의 코드를 사용하세요.")
+                st.markdown("**③ PC 카카오톡에 로그인하고 ‘일정공유방☆’을 별도 대화창으로 열어두세요.** 카카오톡의 다른 팝업이나 대화상자는 닫아주세요.")
+                st.markdown("**④ 아래에서 읽을 메시지의 시작일과 종료일을 고른 뒤 ‘카카오톡 일정 가져와서 등록’을 누르세요.** 처음 브라우저에서 로컬 네트워크 접근 권한을 물으면 내용을 확인하세요. 이 기능은 브라우저와 현재 PC의 연결 프로그램 사이 통신을 사용합니다.")
+                st.markdown("**⑤ 등록 결과와 캘린더의 일정 내용을 확인하세요.** 정보가 부족한 메시지는 확인이 필요한 항목으로 나올 수 있습니다.")
+                st.caption("연결코드는 다른 사람과 공유하지 마세요. 이 기능은 가져오기 버튼을 눌렀을 때 지정한 방의 텍스트를 읽으며, 메시지를 보내지 않습니다.")
+        with st.expander("설치 후 사용 · 연결이 안 될 때"):
+            st.markdown("**다음 날 다시 사용할 때**: 바탕화면의 **Site Schedule Kakao PC**를 실행하고 카카오톡 대화방을 열어주세요. 매번 다시 설치할 필요는 없습니다.")
+            st.markdown("**검은 연결 창을 닫아도 되나요?**: 이 버전은 창을 닫으면 연결이 종료됩니다. 카카오톡 가져오기를 사용하는 동안 창을 열어두세요. 다시 연결하려면 바탕화면 바로가기를 실행하세요.")
+            st.markdown("**127.0.0.1 연결 거부**: 이 PC의 연결 프로그램이 꺼져 있을 수 있습니다. 바탕화면 바로가기를 실행하고 ‘연결 실행 중’ 표시를 확인한 다음 연결코드 페이지를 다시 여세요.")
+            st.markdown("**PC 연결코드 오류**: 현재 PC의 연결코드 페이지에서 다시 복사하세요. 다른 PC의 코드는 사용할 수 없습니다.")
+            st.markdown("**이미 실행 중 / 연결 시작 실패**: 예전 `start_kakao_pc.bat` 실행 창이 남아 있다면 종료한 뒤 새 바로가기로 실행하세요.")
+            st.markdown("**설치·실행 오류**: 오류 문구가 보이는 화면을 담당자에게 전달하세요. 연결코드와 비밀번호는 가려주세요. 실행 기록은 파일 탐색기 주소창에 아래 경로를 넣으면 확인할 수 있습니다.")
+            st.code(r"%LOCALAPPDATA%\SiteScheduleKakaoPC\data\bridge-startup.log", language="text")
+            st.caption("일정 조회·직접 등록에는 PC 연결 프로그램이 필요하지 않습니다. 카카오톡 가져오기 기능을 사용하는 PC에서만 실행하면 됩니다.")
         component_path = root / "kakao_component"
         if not component_path.is_dir():
             st.error("kakao_component 폴더를 코드와 함께 업로드해주세요.")

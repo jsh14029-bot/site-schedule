@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><style>
+body{font:14px system-ui,sans-serif;margin:0;color:#30343b}button{padding:12px 16px;border:0;border-radius:8px;background:#fee500;color:#252525;font:600 15px system-ui;width:100%;cursor:pointer}button:disabled{opacity:.6;cursor:wait}input{box-sizing:border-box;width:100%;padding:9px;margin:6px 0 12px;border:1px solid #999;border-radius:6px}label{display:block;margin-top:8px}p{line-height:1.5;margin:8px 0}a{color:#1769aa}#status{white-space:pre-wrap}small{color:#666}
+.dates{display:flex;gap:12px}.dates label{flex:1;min-width:0}@media(max-width:360px){.dates{display:block}}
+@media(prefers-color-scheme:dark){body{color:#eee}input{background:#222;color:#eee}small{color:#bbb}a{color:#8ec5ff}}
+</style></head><body>
+<p><strong>일정공유방☆ → 일정 자동등록</strong></p>
+<small>PC 카카오톡에서 이 방을 별도 창으로 열어두세요. 사진·첨부파일은 열지 않습니다.</small>
+<details id="setup"><summary>PC 연결 설정 (처음 한 번)</summary>
+<p><a href="http://127.0.0.1:8765/" target="_blank" rel="noopener">이 컴퓨터의 연결코드 보기</a></p>
+<label>PC 연결코드<input id="token" type="password" autocomplete="off" placeholder="PC 연결 프로그램에서 확인한 코드"></label>
+</details>
+<p><strong>읽을 메시지 기간</strong></p>
+<div class="dates"><label>시작일<input id="start" type="date"></label><label>종료일<input id="end" type="date"></label></div>
+<small>시작일과 종료일을 포함합니다. 일정 날짜가 아닌 메시지를 보낸 날짜를 기준으로 읽습니다.</small>
+<button id="read">💬 카카오톡 일정 가져와서 등록</button>
+<p id="status" role="status"></p>
+<script>
+const send=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+let args={},requestId=null;
+function height(){send('streamlit:setFrameHeight',{height:document.documentElement.scrollHeight+12});}
+window.addEventListener('message',event=>{if(event.source!==parent||event.data.type!=='streamlit:render')return;args=event.data.args||{};let stored='';try{stored=sessionStorage.getItem('schedule_pc_token')||'';}catch(_){}for(const id of ['start','end'])if(!document.querySelector('#'+id).value)document.querySelector('#'+id).value=args.today||'';if(!document.querySelector('#token').value)document.querySelector('#token').value=args.local_token||stored;if(!document.querySelector('#token').value)document.querySelector('#setup').open=true;height();});
+document.querySelector('#setup').addEventListener('toggle',height);
+window.addEventListener('resize',height);
+document.querySelector('#read').addEventListener('click',async()=>{
+ const token=document.querySelector('#token').value.trim(),start=document.querySelector('#start').value,end=document.querySelector('#end').value,status=document.querySelector('#status'),button=document.querySelector('#read');
+ if(!token||!start||!end){status.textContent='PC 연결코드와 시작일·종료일을 입력해주세요.';document.querySelector('#setup').open=true;height();return;}
+ if(end<start){status.textContent='종료일은 시작일보다 빠를 수 없습니다.';height();return;}
+ try{sessionStorage.setItem('schedule_pc_token',token);}catch(_){}button.disabled=true;status.textContent='카카오톡의 텍스트를 읽고 있습니다. 잠시 마우스·키보드 조작을 멈춰주세요.';height();
+ const control=new AbortController();const timeout=setTimeout(()=>control.abort(),90000);
+ try{
+  if(start!==end){
+   const health=await fetch('http://127.0.0.1:8765/health',{signal:control.signal});
+   const info=await health.json();
+   if(!health.ok||info.date_range!==true)throw new Error('기간 읽기를 사용하려면 사이트의 최신 MSI(1.2.0)를 설치해주세요. 검은 연결 창을 닫고 설치한 뒤 바탕화면 바로가기로 다시 실행하세요.');
+  }
+  requestId=crypto.randomUUID();
+  const response=await fetch('http://127.0.0.1:8765/read',{method:'POST',headers:{'Content-Type':'application/json','X-Schedule-Token':token},body:JSON.stringify({request_id:requestId,read_date:start,start_date:start,end_date:end}),signal:control.signal});
+  const result=await response.json();if(!response.ok)throw new Error(result.error||'연결에 실패했습니다.');
+  send('streamlit:setComponentValue',{value:result,dataType:'json'});
+  status.textContent=`기간 ${start} ~ ${end} · 텍스트 ${result.messages_read}건 확인 · 등록 후보 ${result.batch.schedules.length}건 · 확인 필요 ${result.pending.length}건. 아래 등록 결과를 확인하세요.`;
+ }catch(error){status.textContent=error instanceof TypeError?'PC 연결 프로그램이 켜져 있는지 확인해주세요. 브라우저에서 로컬 네트워크 접근을 물으면 허용해야 합니다. 연결이 차단되면 localhost:8501에서 사용해주세요.':error.message;}
+ finally{clearTimeout(timeout);button.disabled=false;height();}
+});
+send('streamlit:componentReady',{apiVersion:1});height();
+</script></body></html>

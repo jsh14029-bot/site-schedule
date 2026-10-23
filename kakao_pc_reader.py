@@ -1,3 +1,4 @@
+import os
 """Read only the authorized KakaoTalk room's exported plain-text messages.
 
 The local product uses KakaoTalk's normal Ctrl+S dialog. It never accesses
@@ -15,7 +16,7 @@ from pathlib import Path
 from kakao_sync import KAKAO_ROOM_NAME
 from schedule_autofill import parse_schedule_text
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("SCHEDULE_PC_DATA_DIR", str(Path(__file__).resolve().parent)))
 DAY = re.compile(r"^-*\s*(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*(?:[월화수목금토일]요일)?\s*-*\s*$")
 MESSAGE = re.compile(r"^\[([^\]\n]+)\]\s*\[((?:오전|오후)\s*\d{1,2}:\d{2})\]\s*(.*)$")
 MOBILE = re.compile(r"^(\d{4})[.년/-]\s*(\d{1,2})[.월/-]\s*(\d{1,2})[.일]?\s*((?:오전|오후)\s*\d{1,2}:\d{2}),\s*(.*?)\s*:\s*(.*)$")
@@ -23,9 +24,12 @@ WORK = re.compile(r"반입|타설|회의|미장|정착|작업|검측|검사|자�
 MEDIA = re.compile(r"^(?:사진(?:\s*\d+장)?|동영상|이모티콘|파일|삭제된 메시지입니다\.?|메시지가 삭제되었습니다\.?)$")
 
 
-def parse_transcript(text, read_date):
+def parse_transcript(text, read_date, end_date=None):
     """Filter by posting date before examining schedule content."""
     read_date = date.fromisoformat(str(read_date))
+    end_date = date.fromisoformat(str(end_date)) if end_date is not None else read_date
+    if end_date < read_date:
+        raise ValueError("종료일은 시작일보다 빠를 수 없습니다.")
     if KAKAO_ROOM_NAME not in text[:500]:
         raise ValueError(f"‘{KAKAO_ROOM_NAME}’ 대화 내용인지 확인하지 못했습니다.")
     messages = []
@@ -53,15 +57,16 @@ def parse_transcript(text, read_date):
     schedules, pending = [], []
     count = 0
     for message in messages:
-        if message["day"] != read_date:
+        if message["day"] is None or not read_date <= message["day"] <= end_date:
             continue
         body = "\n".join(message["lines"]).strip()
         count += 1
         attachment = re.match(r"^(?:파일|사진|동영상)\s*:", body) or re.fullmatch(r"[^\n]+\.(?:pdf|xlsx?|docx?|pptx?|hwp|hwpx|zip|dwg|png|jpe?g|mp4)", body, re.IGNORECASE)
         if not body or MEDIA.fullmatch(body) or attachment or re.fullmatch(r"https?://\S+", body) or not WORK.search(body):
             continue
-        identity = hashlib.sha256((str(read_date) + message["sender"] + message["time"] + body).encode()).hexdigest()
-        fields, warnings = parse_schedule_text(body, today=read_date)
+        posted_date = message["day"]
+        identity = hashlib.sha256((str(posted_date) + message["sender"] + message["time"] + body).encode()).hexdigest()
+        fields, warnings = parse_schedule_text(body, today=posted_date)
         reasons = []
         if "schedule_date" not in fields:
             reasons.append("작업 날짜가 명시되지 않았습니다.")
@@ -91,10 +96,15 @@ def parse_transcript(text, read_date):
         fields.setdefault("schedule_time", None)
         fields.setdefault("end_time", None)
         fields["source_id"] = identity
-        fields["memo"] = f"출처: {KAKAO_ROOM_NAME} / {read_date} {message['time']} / {message['sender']}\n원문:\n{body}"
+        fields["memo"] = f"출처: {KAKAO_ROOM_NAME} / {posted_date} {message['time']} / {message['sender']}\n원문:\n{body}"
         schedules.append(fields)
+    available_dates = sorted({message["day"].isoformat() for message in messages if message["day"] is not None})
+    if count == 0:
+        coverage = f"{available_dates[0]} ~ {available_dates[-1]}" if available_dates else "날짜 확인 불가"
+        selection = read_date.isoformat() if read_date == end_date else f"{read_date.isoformat()} ~ {end_date.isoformat()}"
+        raise ValueError(f"저장된 대화에서 {selection}에 작성된 메시지를 찾지 못했습니다. 읽은 대화 날짜 범위: {coverage}. 선택 기간을 확인해주세요.")
     batch = {"version": 1, "room_name": KAKAO_ROOM_NAME, "source": f"KakaoTalk:{KAKAO_ROOM_NAME}", "schedules": schedules}
-    return {"batch": batch, "pending": pending, "messages_read": count, "read_date": read_date.isoformat()}
+    return {"batch": batch, "pending": pending, "messages_read": count, "read_date": read_date.isoformat(), "start_date": read_date.isoformat(), "end_date": end_date.isoformat(), "export_messages_total": len(messages), "export_dates": available_dates}
 
 
 def _is_kakao_process(pid):
@@ -115,29 +125,77 @@ def _is_kakao_process(pid):
         kernel.CloseHandle(handle)
 
 
-def read_open_room(read_date):
+def read_open_room(read_date, end_date=None):
     if sys.platform != "win32":
         raise ValueError("카카오톡이 열린 Windows PC에서 연결 프로그램을 실행해주세요.")
     import pythoncom
     pythoncom.CoInitialize()
     try:
-        return _read_open_room_windows(read_date)
+        return _read_open_room_windows(read_date, end_date)
     finally:
         pythoncom.CoUninitialize()
 
 
-def read_exported_transcript(exported, read_date, timeout=15):
-    """Kakao may still hold the export open after the Save button returns."""
+def _read_without_writer(exported):
+    """Read an exported TXT only when no writer still has the file open."""
+    if sys.platform != "win32":
+        return exported.read_bytes()
+    import os
+    import msvcrt
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                   ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    # FILE_SHARE_READ deliberately excludes write-sharing. This does not change
+    # permissions or modify the export; it merely waits for Kakao's writer.
+    handle = kernel.CreateFileW(str(exported), 0x80000000, 1, None, 3, 0x80, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        fd = msvcrt.open_osfhandle(int(handle), os.O_RDONLY | os.O_BINARY)
+    except Exception:
+        kernel.CloseHandle(handle)
+        raise
+    with os.fdopen(fd, "rb") as stream:
+        return stream.read()
+
+
+def read_exported_transcript(exported, read_date, timeout=45, stable_seconds=2.0, end_date=None):
+    """Wait for a quiet, unlocked export instead of parsing the first chunk."""
     deadline = clock.monotonic() + timeout
+    last_signature = None
+    stable_since = None
     last_error = None
+    observed_nonempty = False
     while clock.monotonic() < deadline:
         try:
-            data = exported.read_bytes()
-        except (FileNotFoundError, PermissionError) as error:
+            stat = exported.stat()
+            signature = (stat.st_size, stat.st_mtime_ns)
+            if not stat.st_size:
+                stable_since = None
+                last_signature = None
+                clock.sleep(0.15)
+                continue
+            observed_nonempty = True
+            if signature != last_signature:
+                last_signature = signature
+                stable_since = clock.monotonic()
+            if clock.monotonic() - stable_since < stable_seconds:
+                clock.sleep(0.15)
+                continue
+            data = _read_without_writer(exported)
+            after = exported.stat()
+            if (after.st_size, after.st_mtime_ns) != signature or len(data) != after.st_size:
+                last_signature = None
+                stable_since = None
+                continue
+        except OSError as error:
             last_error = error
-            clock.sleep(0.15)
-            continue
-        if not data:
+            last_signature = None
+            stable_since = None
             clock.sleep(0.15)
             continue
         encodings = ("utf-16",) if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "cp949")
@@ -146,14 +204,18 @@ def read_exported_transcript(exported, read_date, timeout=15):
                 text = data.decode(encoding)
             except UnicodeError:
                 continue
-            return parse_transcript(text, read_date)
+            result = parse_transcript(text, read_date, end_date)
+            result["reader_version"] = "1.2.0"
+            return result
         raise ValueError("저장된 대화 파일의 문자 형식을 읽지 못했습니다.")
+    if observed_nonempty:
+        raise ValueError("대화 저장이 아직 끝나지 않았거나 파일이 사용 중입니다. 카카오톡의 대화 내보내기 완료 여부를 확인해주세요. 이번에는 일정을 등록하지 않았습니다.")
     if isinstance(last_error, PermissionError):
-        raise ValueError("대화 파일은 저장됐지만 카카오톡이 파일을 사용 중이라 읽지 못했습니다. 잠시 후 다시 눌러주세요.")
+        raise ValueError("카카오톡이 대화 파일을 사용 중이라 읽지 못했습니다. 내보내기가 끝난 뒤 다시 눌러주세요.")
     raise ValueError("지정한 위치에서 저장된 대화 파일을 찾지 못했습니다. 저장창이 닫혔는지 확인해주세요.")
 
 
-def _read_open_room_windows(read_date):
+def _read_open_room_windows(read_date, end_date=None):
     from pywinauto import Desktop
     windows = [window for window in Desktop(backend="win32").windows(title=KAKAO_ROOM_NAME, visible_only=True) if _is_kakao_process(window.process_id())]
     if len(windows) != 1:
@@ -186,7 +248,7 @@ def _read_open_room_windows(read_date):
         # click/invoke therefore waits for that modal and never reaches file read.
         dialog.child_window(control_id=1, class_name="Button").post_message(0x00F5, 0, 0)
         stage = "저장 파일 읽기"
-        return read_exported_transcript(exported, read_date)
+        return read_exported_transcript(exported, read_date, end_date=end_date)
     except (ValueError, ImportError):
         raise
     except Exception as error:

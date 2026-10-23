@@ -1,3 +1,4 @@
+import os
 """Loopback-only bridge for the user-initiated KakaoTalk read button."""
 import hmac
 import html
@@ -11,14 +12,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("SCHEDULE_PC_DATA_DIR", str(Path(__file__).resolve().parent)))
 if (ROOT / ".autofill-deps").exists():
     site.addsitedir(str(ROOT / ".autofill-deps"))
     sys.path.insert(0, str(ROOT / ".autofill-deps"))
 from kakao_pc_reader import read_open_room
 
 ALLOWED_ORIGINS = {"http://localhost:8501", "http://127.0.0.1:8501", "https://site-schedule-edhe97xqsrtqi9ojdpzqle.streamlit.app"}
-PORT = 8765
+PORT = int(os.environ.get("SCHEDULE_PC_PORT", "8765"))
 READ_LOCK = Lock()
 
 
@@ -73,9 +74,9 @@ def make_handler(token, reader=read_open_room):
             if not self.allowed():
                 self.reply(403, {"error": "허용되지 않은 연결입니다."})
             elif self.path == "/health":
-                self.reply(200, {"connected": True, "room": "일정공유방☆"})
+                self.reply(200, {"connected": True, "product": "site-schedule-kakao-pc", "version": "1.2.0", "room": "일정공유방☆", "date_range": True})
             elif self.path == "/" and not self.headers.get("Origin"):
-                self.reply(200, '<!doctype html><meta charset="utf-8"><title>카카오톡 PC 연결</title><h1>카카오톡 PC 연결 실행 중</h1><p>일정관리 프로그램의 PC 연결코드 칸에 아래 코드를 복사하세요. 다른 사람에게 공유하지 마세요.</p><textarea readonly cols="55" rows="2">' + html.escape(token) + '</textarea><p>대상: 일정공유방☆ · 오늘의 텍스트만 · 메시지 전송 없음</p>', "text/html; charset=utf-8")
+                self.reply(200, '<!doctype html><meta charset="utf-8"><title>카카오톡 PC 연결</title><h1>카카오톡 PC 연결 실행 중</h1><p>일정관리 프로그램의 PC 연결코드 칸에 아래 코드를 복사하세요. 다른 사람에게 공유하지 마세요.</p><textarea readonly cols="55" rows="2">' + html.escape(token) + '</textarea><p>대상: 일정공유방☆ · 선택한 기간의 텍스트만 · 메시지 전송 없음</p>', "text/html; charset=utf-8")
             else:
                 self.reply(404, {"error": "없는 경로입니다."})
 
@@ -91,7 +92,10 @@ def make_handler(token, reader=read_open_room):
                 if not 0 < length <= 4096:
                     raise ValueError("요청 크기가 올바르지 않습니다.")
                 request = json.loads(self.rfile.read(length))
-                read_date = date.fromisoformat(request["read_date"])
+                read_date = date.fromisoformat(request.get("start_date") or request["read_date"])
+                end_date = date.fromisoformat(request.get("end_date") or read_date.isoformat())
+                if end_date < read_date:
+                    raise ValueError("종료일은 시작일보다 빠를 수 없습니다.")
                 request_id = request["request_id"]
                 if not isinstance(request_id, str) or not 1 <= len(request_id) <= 100:
                     raise ValueError("요청 번호를 확인해주세요.")
@@ -103,7 +107,7 @@ def make_handler(token, reader=read_open_room):
                 return
             try:
                 if request_id not in results:
-                    result = reader(read_date)
+                    result = reader(read_date, end_date) if end_date != read_date else reader(read_date)
                     result["request_id"] = request_id
                     results[request_id] = result
                     if len(results) > 20:
