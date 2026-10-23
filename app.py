@@ -14,7 +14,7 @@ except ImportError:
 import streamlit as st
 from streamlit_calendar import calendar
 from schedule_autofill import parse_schedule_text, recognize_schedule_image
-from kakao_sync import KAKAO_ROOM_NAME, drain_inbox, import_batch
+from kakao_sync import KAKAO_ROOM_NAME, ROOT as KAKAO_ROOT, drain_inbox, import_batch
 from cloud_storage import open_database, migrate_postgres, StorageError
 
 DATABASE_ERRORS = (sqlite3.Error, StorageError)
@@ -531,7 +531,10 @@ def show_notice_builder(connection):
 
 @st.fragment(run_every="10s")
 def receive_kakao_schedules():
-    # A short-lived connection lets new batches arrive while the UI is open.
+    # No remote connection is needed when there are no local inbox files.
+    inbox = KAKAO_ROOT / ".kakao-inbox"
+    if not inbox.is_dir() or not any(inbox.glob("*.json")):
+        return
     connection = None
     try:
         connection = open_database()
