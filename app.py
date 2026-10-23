@@ -15,6 +15,9 @@ import streamlit as st
 from streamlit_calendar import calendar
 from schedule_autofill import parse_schedule_text, recognize_schedule_image
 from kakao_sync import KAKAO_ROOM_NAME, drain_inbox, import_batch
+from cloud_storage import open_database, migrate_postgres, StorageError
+
+DATABASE_ERRORS = (sqlite3.Error, StorageError)
 
 st.set_page_config(page_title="현장 일정관리", page_icon="🏗️", layout="wide")
 
@@ -40,6 +43,9 @@ DB_COLUMNS = ["schedule_date", "schedule_time", "category", "title", "company", 
 
 
 def migrate_database(connection):
+    if getattr(connection, "is_postgres", False):
+        migrate_postgres(connection)
+        return
     # 기존 행을 변경하지 않고 동일 트랜잭션에서 부족한 열만 추가합니다.
     connection.execute("BEGIN IMMEDIATE")
     try:
@@ -436,7 +442,7 @@ def show_direct_kakao(connection):
                 if batch.get("room_name") != KAKAO_ROOM_NAME:
                     raise ValueError("지정한 채팅방에서 읽은 내용이 아닙니다.")
                 result = import_batch(connection, batch) if batch.get("schedules") else {"inserted": [], "skipped": []}
-            except (ValueError, TypeError, sqlite3.Error):
+            except (ValueError, TypeError, *DATABASE_ERRORS):
                 st.error("읽은 일정의 형식을 확인하지 못했습니다. 등록하지 않았습니다.")
             else:
                 st.session_state["kakao_direct_processed"] = value["request_id"]
@@ -526,14 +532,16 @@ def show_notice_builder(connection):
 @st.fragment(run_every="10s")
 def receive_kakao_schedules():
     # A short-lived connection lets new batches arrive while the UI is open.
-    connection = sqlite3.connect("schedule.db", timeout=30)
+    connection = None
     try:
+        connection = open_database()
         results = drain_inbox(connection)
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         st.caption("일정 저장소가 사용 중입니다. 잠시 후 자동으로 다시 확인합니다.")
         return
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     inserted = sum(len(result.get("inserted", [])) for result in results)
     skipped = sum(len(result.get("skipped", [])) for result in results)
     if results:
@@ -559,7 +567,7 @@ def show_kakao_sync(connection):
                 result = import_batch(connection, payload)
             except (ValueError, UnicodeError):
                 st.error("일정 파일의 형식·날짜·시간을 확인해주세요. 이 파일의 일정은 등록하지 않았습니다.")
-            except sqlite3.Error:
+            except DATABASE_ERRORS:
                 st.error("일정 저장소가 사용 중입니다. 잠시 후 다시 시도해주세요.")
             else:
                 st.session_state["kakao_uploaded_digest"] = digest
@@ -577,10 +585,14 @@ def show_kakao_sync(connection):
 
 def main():
     # 기존 버전과 동일한 경로. 기존 프로젝트 폴더에서 실행하세요.
-    conn = sqlite3.connect("schedule.db", timeout=30)
-    conn.row_factory = sqlite3.Row
+    conn = None
     try:
+        conn = open_database()
         migrate_database(conn)
+        if getattr(conn, "is_postgres", False):
+            st.caption("☁️ 공용 DB 연결됨 · 등록·수정 즉시 저장 · 서버 재시작 후에도 유지")
+        else:
+            st.warning("로컬 SQLite 모드입니다. 클라우드에서는 데이터 보존을 보장하지 않습니다.")
         receive_kakao_schedules()
         st.title("🏗️ 현장 일정관리")
         st.caption("주요 자재반입 및 현장 업무일정을 한 곳에서 관리합니다.")
@@ -699,8 +711,12 @@ def main():
             show_kakao_sync(conn)
         else:
             show_notice_builder(conn)
+    except DATABASE_ERRORS:
+        st.error("DB 연결 또는 저장에 실패했습니다. 이번 변경은 저장되지 않았습니다. 입력 내용을 유지한 채 설정을 확인하고 다시 시도하세요.")
+        st.info("온라인 사용: Manage app → Settings → Secrets에 Supabase [storage] 설정이 필요합니다. 연결 실패 시 빈 DB로 전환하지 않습니다.")
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":

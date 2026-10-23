@@ -5,3 +5,5 @@ Pillow
 streamlit-paste-button>=0.1.2,<1
 rapidocr>=3.10,<4
 onnxruntime>=1.20,<2
+
+psycopg[binary]>=3.2,<4
