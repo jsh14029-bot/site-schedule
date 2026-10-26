@@ -108,6 +108,28 @@ def import_batch(connection, raw):
     return {"source": source, "inserted": inserted, "skipped": skipped}
 
 
+def save_direct_read(connection, value):
+    """Validate the component envelope and acknowledge only committed imports."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, dict):
+        raise ValueError("카카오톡 인식 결과를 전달받지 못했습니다. 다시 시도해주세요.")
+    request_id = value.get("request_id")
+    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 100:
+        raise ValueError("카카오톡 요청 번호를 확인하지 못했습니다.")
+    batch = value.get("batch")
+    if not isinstance(batch, dict) or batch.get("room_name") != KAKAO_ROOM_NAME:
+        raise ValueError("지정한 채팅방에서 읽은 내용이 아닙니다.")
+    if not isinstance(batch.get("schedules"), list):
+        raise ValueError("인식한 일정 목록을 확인하지 못했습니다.")
+    pending = value.get("pending", [])
+    if not isinstance(pending, list):
+        raise ValueError("확인이 필요한 메시지 형식이 올바르지 않습니다.")
+    result = import_batch(connection, batch) if batch["schedules"] else {"inserted": [], "skipped": []}
+    # import_batch has exited its transaction before this acknowledgment exists.
+    return {"request_id": request_id, "status": "saved", "inserted": len(result["inserted"]), "skipped": len(result["skipped"]), "pending": len(pending)}, result, pending[:200]
+
+
 def enqueue_batch(raw, inbox=None):
     validate_batch(raw)
     inbox = Path(inbox or ROOT / ".kakao-inbox")

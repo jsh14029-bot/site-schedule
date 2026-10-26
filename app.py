@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import hashlib
 import os
@@ -14,7 +15,7 @@ except ImportError:
 import streamlit as st
 from streamlit_calendar import calendar
 from schedule_autofill import parse_schedule_text, recognize_schedule_image
-from kakao_sync import KAKAO_ROOM_NAME, ROOT as KAKAO_ROOT, drain_inbox, import_batch
+from kakao_sync import KAKAO_ROOM_NAME, ROOT as KAKAO_ROOT, drain_inbox, import_batch, save_direct_read
 from cloud_storage import open_database, migrate_postgres, StorageError
 
 DATABASE_ERRORS = (sqlite3.Error, StorageError)
@@ -478,23 +479,54 @@ def show_direct_kakao(connection):
         if os.name == "nt" and token_path.exists():
             local_token = token_path.read_text(encoding="ascii").strip()
         today_korea = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
-        value = reader_component(today=today_korea, local_token=local_token, key="kakao_direct_reader", default=None)
-        st.caption("무료 PC 연결 프로그램이 실행 중이어야 합니다. 버튼을 누른 PC의 카카오톡을 읽고, 현재 열어둔 일정관리 프로그램에 저장합니다.")
-        if isinstance(value, dict) and value.get("request_id") != st.session_state.get("kakao_direct_processed"):
+        value = reader_component(
+            today=today_korea, local_token=local_token,
+            save_ack=st.session_state.get("kakao_direct_ack"),
+            key="kakao_direct_reader_save_v2", default=None,
+        )
+        st.caption("PC에서 인식한 뒤 공용 DB 저장 결과를 확인합니다. 등록 후보 수만으로 저장 완료를 판단하지 마세요.")
+        if isinstance(value, str):
             try:
-                batch = value.get("batch", {})
-                if batch.get("room_name") != KAKAO_ROOM_NAME:
-                    raise ValueError("지정한 채팅방에서 읽은 내용이 아닙니다.")
-                result = import_batch(connection, batch) if batch.get("schedules") else {"inserted": [], "skipped": []}
-            except (ValueError, TypeError, *DATABASE_ERRORS):
-                st.error("읽은 일정의 형식을 확인하지 못했습니다. 등록하지 않았습니다.")
+                value = json.loads(value)
+            except (ValueError, TypeError):
+                st.error("인식 결과를 사이트에 전달하지 못했습니다. 다시 가져오기를 눌러주세요.")
+                value = None
+        if value is not None and not isinstance(value, dict):
+            st.error("인식 결과의 형식을 확인하지 못했습니다. 다시 가져오기를 눌러주세요.")
+        if isinstance(value, dict) and value.get("request_id") != st.session_state.get("kakao_direct_seen"):
+            request_id = value.get("request_id")
+            try:
+                ack, result, pending = save_direct_read(connection, value)
+            except (ValueError, TypeError) as error:
+                ack = {"request_id": request_id, "status": "error", "message": str(error)}
+            except DATABASE_ERRORS:
+                ack = {"request_id": request_id, "status": "error", "message": "공용 DB 저장을 확인하지 못했습니다. 연결 상태를 확인하고 저장 결과 다시 확인을 눌러주세요."}
             else:
-                st.session_state["kakao_direct_processed"] = value["request_id"]
                 st.session_state["kakao_direct_result"] = result
-                st.session_state["kakao_direct_pending"] = value.get("pending", [])[:200]
+                st.session_state["kakao_direct_pending"] = pending
+            st.session_state["kakao_direct_ack"] = ack
+            st.session_state["kakao_direct_seen"] = request_id
+            st.rerun()  # Send the committed save result back to the PC component.
+        ack = st.session_state.get("kakao_direct_ack")
         result = st.session_state.get("kakao_direct_result")
-        if result:
-            st.success(f"직접 연결 결과: 등록 {len(result['inserted'])}건 · 중복 제외 {len(result['skipped'])}건")
+        if ack and ack.get("status") == "error":
+            st.error(ack["message"])
+        elif ack and ack.get("status") == "saved" and result is not None:
+            st.success(f"DB 저장 확인: 새 등록 {ack['inserted']}건 · 중복 제외 {ack['skipped']}건")
+            ids = list(dict.fromkeys(result["inserted"] + result["skipped"]))
+            if ids:
+                imported_rows = connection.execute(
+                    "SELECT id,schedule_date,title,deleted_at FROM schedules WHERE id IN (" + ",".join("?" for _ in ids) + ") ORDER BY schedule_date,id", ids,
+                ).fetchall()
+                inserted_ids = set(result["inserted"])
+                st.dataframe([
+                    {"일정 날짜": row["schedule_date"], "일정명": row["title"], "결과": "새 등록" if row["id"] in inserted_ids else ("중복 · 휴지통에 있음" if row["deleted_at"] else "중복 · 이미 등록됨")}
+                    for row in imported_rows
+                ], hide_index=True, use_container_width=True)
+                st.caption("캘린더에는 메시지를 보낸 날짜가 아니라 위 일정 날짜에 표시됩니다. 휴지통에 있는 일정은 자동 복원하지 않습니다.")
+                if st.button("등록된 일정 보기", key="kakao_show_saved"):
+                    st.session_state["pending_menu"] = "📋 일정관리"
+                    st.rerun()
         pending = st.session_state.get("kakao_direct_pending", [])
         if pending:
             with st.expander(f"확인이 필요한 메시지 {len(pending)}건", expanded=True):
