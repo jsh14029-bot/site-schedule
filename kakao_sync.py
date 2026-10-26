@@ -89,10 +89,16 @@ def import_batch(connection, raw):
             source TEXT NOT NULL, imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         for record in records:
-            known = connection.execute("SELECT schedule_id FROM schedule_imports WHERE source_key = ?", (record["source_key"],)).fetchone()
-            if known:
+            known = connection.execute("""SELECT i.schedule_id,s.id AS existing_id
+                FROM schedule_imports i LEFT JOIN schedules s ON s.id = i.schedule_id
+                WHERE i.source_key = ?""", (record["source_key"],)).fetchone()
+            if known and known[1] is not None:
                 skipped.append(known[0])
                 continue
+            if known:
+                # A permanently removed schedule can leave import history behind.
+                # Repair only this stale link, in the same transaction as re-import.
+                connection.execute("DELETE FROM schedule_imports WHERE source_key = ?", (record["source_key"],))
             # Include trash: importing an old message must not resurrect a deleted schedule.
             existing = connection.execute("SELECT id,title,location,category,schedule_time,end_time FROM schedules WHERE schedule_date = ?", (record["schedule_date"],)).fetchall()
             duplicate = next((row for row in existing if normalize(row[1]) == normalize(record["title"]) and normalize(row[2]) == normalize(record["location"]) and row[3] == record["category"] and (not record["schedule_time"] or not row[4] or record["schedule_time"] == row[4]) and (not record["end_time"] or not row[5] or record["end_time"] == row[5])), None)
