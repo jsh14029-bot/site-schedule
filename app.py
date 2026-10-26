@@ -425,7 +425,7 @@ def show_direct_kakao(connection):
                 mime="application/x-msi", key="download_kakao_pc",
                 use_container_width=True,
             )
-        st.caption("처음 사용하는 PC에서는 아래 설명을 1번부터 따라가세요. 이미 설치했다면 바탕화면 Site Schedule Kakao PC 바로가기로 실행하면 됩니다. 설치 파일 버전: 1.2.0.")
+        st.caption("처음 사용하는 PC에서는 아래 설명을 1번부터 따라가세요. 이미 설치했다면 바탕화면 Site Schedule Kakao PC 바로가기로 실행하면 됩니다. 설치 파일 버전: 1.2.1.")
         with st.expander("처음 설치하는 분 · 다운로드부터 연결까지 자세히 보기", expanded=True):
             download_tab, warning_tab, install_tab, connect_tab = st.tabs([
                 "1. 다운로드", "2. 보안 경고", "3. 설치", "4. 연결",

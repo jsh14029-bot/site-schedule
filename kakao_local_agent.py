@@ -74,7 +74,7 @@ def make_handler(token, reader=read_open_room):
             if not self.allowed():
                 self.reply(403, {"error": "허용되지 않은 연결입니다."})
             elif self.path == "/health":
-                self.reply(200, {"connected": True, "product": "site-schedule-kakao-pc", "version": "1.2.0", "room": "일정공유방☆", "date_range": True})
+                self.reply(200, {"connected": True, "product": "site-schedule-kakao-pc", "version": "1.2.1", "room": "일정공유방☆", "date_range": True})
             elif self.path == "/" and not self.headers.get("Origin"):
                 self.reply(200, '<!doctype html><meta charset="utf-8"><title>카카오톡 PC 연결</title><h1>카카오톡 PC 연결 실행 중</h1><p>일정관리 프로그램의 PC 연결코드 칸에 아래 코드를 복사하세요. 다른 사람에게 공유하지 마세요.</p><textarea readonly cols="55" rows="2">' + html.escape(token) + '</textarea><p>대상: 일정공유방☆ · 선택한 기간의 텍스트만 · 메시지 전송 없음</p>', "text/html; charset=utf-8")
             else:
